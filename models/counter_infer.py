@@ -155,6 +155,9 @@ class CNT(nn.Module):
         else:
             for i in range(len(outputs)):
                 outputs[i]["scores"] = outputs[i]["box_v"]
+        
+        print(f"{masks.shape=}")
+        print(f"{ious.shape=}")
 
         return outputs, ref_points, centerness, outputs_coord, masks
 

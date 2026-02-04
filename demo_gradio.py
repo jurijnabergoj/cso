@@ -11,6 +11,8 @@ from torchvision import transforms as T
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 
+os.environ.pop("SSL_CERT_FILE", None)
+os.environ.pop("SSL_CERT_DIR", None)
 
 # Load model (once, to avoid reloading)
 

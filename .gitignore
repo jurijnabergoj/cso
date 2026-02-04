@@ -100,3 +100,12 @@ cache/
 *.pdb
 *.mat
 *.h5
+
+# ======================
+# Custom
+# ======================
+*.png
+*.npy
+*.sif
+
+transforms.json
