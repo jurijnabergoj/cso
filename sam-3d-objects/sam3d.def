@@ -1,0 +1,90 @@
+Bootstrap: docker
+From: nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+
+%environment
+    export PATH=/opt/conda/bin:$PATH
+    export PYTHONPATH=/workspace/sam-3d-objects:$PYTHONPATH
+    export PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
+    export PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
+    export CUDA_HOME=/usr/local/cuda-12.1
+    export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH
+
+%post
+    # Update and install system dependencies
+    apt-get update && apt-get install -y \
+        git \
+        wget \
+        build-essential \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender-dev \
+        libgomp1 \
+        vim \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install Mambaforge
+    wget https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh -O /tmp/mambaforge.sh
+    bash /tmp/mambaforge.sh -b -p /opt/conda
+    rm /tmp/mambaforge.sh
+    export PATH=/opt/conda/bin:$PATH
+
+    # Initialize conda
+    /opt/conda/bin/conda init bash
+    . /opt/conda/etc/profile.d/conda.sh
+
+    # Create working directory
+    mkdir -p /workspace
+    cd /workspace
+
+    # Clone the repository
+    git clone https://github.com/facebookresearch/sam-3d-objects.git
+    cd sam-3d-objects
+
+    # Create conda environment from yml
+    mamba env create -f environments/default.yml -n sam3d-objects
+
+    # Activate environment
+    mamba activate sam3d-objects
+
+    # Set pip environment variables
+    export PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
+    export PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
+
+    # Install sam3d-objects core dependencies
+    pip install -e '.[dev]'
+
+    # Install pytorch3d (this needs GPU access during build)
+    pip install -e '.[p3d]'
+
+    # Install inference dependencies
+    pip install -e '.[inference]'
+
+    # Apply hydra patch
+    cd /workspace/sam-3d-objects
+    ./patching/hydra
+
+    # Clean up
+    mamba clean -a -y
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%runscript
+    #!/bin/bash
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate sam3d-objects
+    exec "$@"
+
+%labels
+    Author Jurij Nabergoj
+    Version v1.0
+    Description SAM 3D Objects environment with CUDA 12.1
+
+%help
+    This container provides the SAM 3D Objects environment.
+
+    Usage:
+        singularity exec --nv sam3d.sif python your_script.py
+
+    Make sure to use --nv flag to enable GPU support.

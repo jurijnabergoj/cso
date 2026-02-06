@@ -350,9 +350,12 @@ def load_image(path):
 
 def load_mask(path):
     mask = load_image(path)
-    mask = mask > 0
-    if mask.ndim == 3:
-        mask = mask[..., -1]
+    # mask = mask > 0
+    # if mask.ndim == 3:
+    #     mask = mask[..., -1]
+    mask = mask[..., :3]
+    mask = mask.sum(axis=-1) > 0
+    mask = mask.astype(np.uint8)
     return mask
 
 

@@ -1,0 +1,82 @@
+Bootstrap: docker
+From: nvidia/cuda:12.1.0-devel-ubuntu22.04
+
+%environment
+    export LC_ALL=C
+    export MAMBA_ROOT_PREFIX=/opt/conda
+    export PATH="/opt/conda/bin:$PATH"
+    export TORCH_CUDA_ARCH_LIST="7.0"
+    export MAX_JOBS=1
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export TORCH_CUDA_ARCH_LIST="7.0"
+    export MAX_JOBS=1
+    export MAMBA_ROOT_PREFIX=/opt/conda
+
+
+    apt update -y
+    apt install -y \
+        curl \
+        git \
+        ffmpeg \
+        libgl1 \
+        libglib2.0-0 \
+        ca-certificates \
+        bzip2 \
+        jq
+
+    apt-get update && apt-get install -y \
+        build-essential \
+        cmake \
+        git
+
+    # ---- micromamba (much smaller than conda) ----
+    curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
+    mkdir -p /opt/conda
+    mv bin/micromamba /usr/local/bin/
+    micromamba shell init -s bash
+
+    # ---- create env ----
+    micromamba create -y -n counting3d -c pytorch -c nvidia -c conda-forge \
+        python=3.10 \
+        pytorch=2.1.2 \
+        torchvision \
+        pytorch-cuda=12.1
+
+    micromamba run -n counting3d pip install \
+        "numpy<2" \
+        scipy \
+        tqdm \
+        matplotlib \
+        opencv-python \
+        pillow \
+        imageio \
+        tifffile \
+        scikit-image \
+        einops \
+        timm \
+        nerfstudio==1.1.5 \
+        gsplat
+
+    # ---- FORCE gsplat CUDA build ----
+    micromamba run -n counting3d python - << 'EOF'
+import gsplat
+from gsplat.cuda import _backend
+print("gsplat CUDA extension built successfully")
+EOF
+
+    # ---- external repos (shallow clone) ----
+    mkdir -p /workspace/ext
+    cd /workspace/ext
+
+    git clone --depth 1 https://github.com/facebookresearch/dinov2
+    micromamba run -n counting3d pip install fvcore omegaconf
+
+    git clone --depth 1 https://github.com/DepthAnything/Depth-Anything-V2.git DepthAnythingV2
+
+    micromamba clean --all --yes
+
+%runscript
+    export MAMBA_ROOT_PREFIX=/opt/conda
+    exec micromamba run -n counting3d "$@"
