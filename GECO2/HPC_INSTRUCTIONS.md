@@ -96,7 +96,7 @@ srun \
   --time=12:00:00 \
   --pty bash
 
-cd GECO2
+cd cso/GECO2
 singularity exec --nv \
   -B $HOME/mamba:/opt/conda \
   -B $PWD:/workspace \

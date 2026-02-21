@@ -59,10 +59,16 @@ micromamba run -n sam3d pip install git+https://github.com/nerfstudio-project/gs
 Login node:
 
 `
-srun --partition=gpu --gres=gpu:2 --mem=64G --time=12:00:00 --pty bash -lc "
+srun --partition=gpu --gres=gpu:2 --time=12:00:00 --mem=64G --pty bash -lc "
 module load CUDA/12.1.1 &&
 source ~/.bashrc &&
 conda activate sam3d-objects &&
 jupyter lab --ip=0.0.0.0 --no-browser --port=8888"
 `
 
+
+srun --partition=gpu --gres=gpu:1 --time=12:00:00 --pty bash -lc "
+module load CUDA/12.1.1 &&
+source ~/.bashrc &&
+conda activate sam3d-objects &&
+./prepare_data.py"

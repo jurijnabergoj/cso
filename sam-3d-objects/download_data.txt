@@ -1,0 +1,15 @@
+https://zenodo.org/records/15609540/files/Stacks-3D-Synth-Train-Part1.tar.zst?download=1
+
+curl -s "https://zenodo.org/api/records/15609540" \
+  | head -n 1
+
+https://zenodo.org/api/records/15609540/files/Stacks-3D-Synth-Train-Part1.tar.zst/content
+
+wget https://zenodo.org/api/records/15609540/files/Stacks-3D-Synth-Train-Part1.tar.zst/content -O Stacks-3D-Synth-Train-Part1
+
+
+https://zenodo.org/records/15609540/files/Stacks-3D-Synth-Train-Part2.tar.zst?download=1
+
+tar --use-compress-program=unzstd -xvf Stacks-3D-Synth-Val
+
+wget https://zenodo.org/api/records/15609540/files/Stacks-3D-Synth-Val.tar.zst/content -O Stacks-3D-Synth-Val
