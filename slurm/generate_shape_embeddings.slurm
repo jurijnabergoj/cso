@@ -3,18 +3,18 @@
 #SBATCH --partition=gpu
 #SBATCH --array=0-7
 #SBATCH --gres=gpu:1
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=8
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-# --- environment ---
+# environment
 module load CUDA/12.1.1
 source ~/.bashrc
 conda activate sam3d-objects
 
-# --- safety ---
+# safety
 set -e
 set -o pipefail
 
@@ -32,5 +32,5 @@ export PYTHONPATH=$PROJECT_ROOT/ext/sam-3d-objects:$PYTHONPATH
 
 DATA_DIR=/d/hpc/projects/FRI/jn16867/3d-counting/scenes_part2
 
-# --- run ---
+# run
 python scripts/generate_embeddings.py --data-dir "$DATA_DIR" --tag hf

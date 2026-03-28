@@ -11,6 +11,10 @@ import time
 import argparse
 
 
+def is_mask_empty(mask: np.ndarray):
+    return np.count_nonzero(mask) == 0
+
+
 def generate_embeddings(data_dir: set, pipeline: InferenceWithEmbeddings):
     job_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
     num_jobs = int(os.environ.get("SLURM_ARRAY_TASK_COUNT", 1))
@@ -36,6 +40,14 @@ def generate_embeddings(data_dir: set, pipeline: InferenceWithEmbeddings):
         
         obj_mask = (obj_mask > 0).astype(np.uint8) * 255
         box_mask = (box_mask > 0).astype(np.uint8) * 255
+        
+        if is_mask_empty(obj_mask):
+            print(f"Skipping scene {scene.name}: empty obj_mask")
+            continue
+
+        if is_mask_empty(box_mask):
+            print(f"Skipping scene {scene.name}: empty box_mask")
+            continue
         
         object_out = pipeline.run_with_embeddings(image, obj_mask, seed=42)
         container_out = pipeline.run_with_embeddings(image, box_mask, seed=42)
@@ -69,9 +81,7 @@ if __name__ == "__main__":
 
     pipeline = InferenceWithEmbeddings(config_path, compile=False)
     
-    train_data_dir = Path("/d/hpc/projects/FRI/jn16867/3d-counting/scenes_part1")
-    val_data_dir = Path("/d/hpc/projects/FRI/jn16867/3d-counting/scenes_val")
-    
     generate_embeddings(data_dir=args.data_dir, pipeline=pipeline)
+    
     print(f"Finished generating embeddings.")
     
