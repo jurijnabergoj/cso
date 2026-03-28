@@ -7,3 +7,6 @@ logs
 *.out
 *.sif
 *.pth
+
+*.yaml
+!baseline.yaml

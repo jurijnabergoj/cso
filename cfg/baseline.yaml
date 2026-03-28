@@ -1,0 +1,49 @@
+exp_name: baseline
+
+data:
+  train_dirs:
+    - /d/hpc/projects/FRI/jn16867/3d-counting/scenes_part1
+    - /d/hpc/projects/FRI/jn16867/3d-counting/scenes_part2
+  val_dir: /d/hpc/projects/FRI/jn16867/3d-counting/scenes_val
+  batch_size: 100
+  num_workers: 8
+
+model:
+  shape_latent_dim: 32768
+  slat_dim: 8
+  geometric_feature_dim: 13
+  use_hybrid: true
+  d_model: 256
+  d_ff: 128
+  h: 4
+  dropout: 0.1
+  image_feat_dim: 2048
+  image_feat_file: image_feats.pt
+  container_image_feat_file: ""
+  object_image_feat_file: ""
+
+train:
+  epochs: 100
+  lr: 0.001
+  weight_decay: 0.01
+  load_best_model: false
+  best_model_dir: /d/hpc/home/jn16867/cso/outputs/best_model.pth
+  output_dir: /d/hpc/home/jn16867/cso/outputs/baseline
+  save_checkpoints: true
+
+loss:
+  use_l1: true
+  use_mse: true
+  log_scale: true
+
+ablation:
+  use_geom: true
+  use_shape_latent: true
+  use_slat: true
+  use_probabilistic: false
+  use_attention: true
+  use_stats_encoder: false
+  use_conv3d_encoder: false
+  use_image_encoder: false
+  use_masked_image_encoder: false
+  
