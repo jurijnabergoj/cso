@@ -8,12 +8,12 @@
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-# --- environment ---
+# environment
 module load CUDA/12.1.1
 source ~/.bashrc
 conda activate sam3d-objects
 
-# --- safety ---
+# safety
 set -e
 set -o pipefail
 
@@ -25,10 +25,15 @@ PROJECT_ROOT=/d/hpc/home/jn16867/cso
 export PYTHONPATH=$PROJECT_ROOT/ext/sam-3d-objects:$PYTHONPATH
 
 EXP_NAME=${EXP_NAME:-default}
+CONFIG_PATH=${CONFIG_PATH:-$PROJECT_ROOT/cfg/baseline.yaml}
 echo "Experiment name: $EXP_NAME"
+echo "Config: $CONFIG_PATH"
 
-# --- run ---
-python scripts/run_training.py --exp-name "$EXP_NAME"
+# run
+torchrun \
+  --nproc_per_node=2 \
+  scripts/run_training.py \
+  $CONFIG_PATH
 
 # Example:
-# sbatch --export=ALL,EXP_NAME=train1_300epochs slurm/run_training.slurm
+# sbatch --export=ALL,EXP_NAME=my_exp,CONFIG_PATH=/path/to/cfg.yaml slurm/run_training.slurm
