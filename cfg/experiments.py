@@ -502,6 +502,72 @@ R8 = {
     ],
 }
 
+# Round 9: DINOv2 patch pooling
+# Patch pooling works. Blackened backgrounds seem to put DINOv2 out of distribution.
+# Encoding the full image and then pooling only the masked patch tokens is significantly better.
+# This round also includes the geom_features fix (6 metric scale features added) so some gain could come from that.
+# Result: 130.6 MAE (masked_dinov2_slat_geom)
+R9 = {
+    "group": "exp8_masked_patch_pooling",
+    "experiments": [
+        {
+            "name": "masked_dinov2_geom",
+            "ablation.use_attention": False,
+            "ablation.use_shape_latent": False,
+            "ablation.use_slat": False,
+            "ablation.use_image_encoder": False,
+            "ablation.use_masked_image_encoder": True,
+            "model.image_feat_dim": 384,
+            "model.container_image_feat_file": "dinov2_s_container_feats.pt",
+            "model.object_image_feat_file": "dinov2_s_object_feats.pt",
+            "model.use_hybrid": True,
+            "loss.log_scale": True,
+            "train.weight_decay": 0.01,
+            "model.dropout": 0.1,
+            "train.patience": 10,
+            "train.epochs": 200,
+            "train.save_checkpoints": False,
+        },
+        {
+            "name": "masked_dinov2_slat_geom",
+            "ablation.use_attention": False,
+            "ablation.use_shape_latent": False,
+            "ablation.use_slat": True,
+            "ablation.use_image_encoder": False,
+            "ablation.use_masked_image_encoder": True,
+            "model.image_feat_dim": 384,
+            "model.container_image_feat_file": "dinov2_s_container_feats.pt",
+            "model.object_image_feat_file": "dinov2_s_object_feats.pt",
+            "model.use_hybrid": True,
+            "loss.log_scale": True,
+            "train.weight_decay": 0.05,
+            "model.dropout": 0.2,
+            "train.patience": 10,
+            "train.epochs": 200,
+            "train.save_checkpoints": False,
+        },
+        {
+            "name": "masked_scene_dinov2_geom",
+            "ablation.use_attention": False,
+            "ablation.use_shape_latent": False,
+            "ablation.use_slat": False,
+            "ablation.use_image_encoder": True,
+            "ablation.use_masked_image_encoder": True,
+            "model.image_feat_dim": 384,
+            "model.image_feat_file": "dinov2_s_feats.pt",
+            "model.container_image_feat_file": "dinov2_s_container_feats.pt",
+            "model.object_image_feat_file": "dinov2_s_object_feats.pt",
+            "model.use_hybrid": True,
+            "loss.log_scale": True,
+            "train.weight_decay": 0.05,
+            "model.dropout": 0.2,
+            "train.patience": 10,
+            "train.epochs": 200,
+            "train.save_checkpoints": False,
+        },
+    ],
+}
+
 # Active round
 # Change when starting a new round.
 ACTIVE = R8

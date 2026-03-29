@@ -7,10 +7,13 @@ Usage: python scripts/run_experiments.py
 """
 
 import subprocess
+import sys
 from pathlib import Path
 
-from cfg.experiments import GROUP, EXPERIMENTS
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from cfg.utils import generate_config
+from cfg.experiments import GROUP, EXPERIMENTS
 
 PROJECT_ROOT = Path("/d/hpc/home/jn16867/cso")
 SLURM_SCRIPT = PROJECT_ROOT / "slurm" / "run_training.slurm"

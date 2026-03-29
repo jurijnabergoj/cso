@@ -51,4 +51,13 @@ else
     echo "Mode: scene-level"
 fi
 
-python scripts/generate_image_embeddings.py --data-dir "$DATA_DIR" --backbone "$BACKBONE" $MASKED_FLAG
+OVERWRITE_FLAG=""
+if [ "${OVERWRITE:-0}" = "1" ]; then
+    OVERWRITE_FLAG="--overwrite"
+    echo "Overwrite mode"
+else 
+    echo "Don't overwrite mode"
+fi
+
+
+python scripts/generate_image_embeddings.py --data-dir "$DATA_DIR" --backbone "$BACKBONE" $MASKED_FLAG $OVERWRITE_FLAG

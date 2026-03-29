@@ -15,12 +15,12 @@ class DataConfig:
 class ModelConfig:
     shape_latent_dim: int
     slat_dim: int
-    geometric_feature_dim: int
     use_hybrid: bool
     d_model: int
     d_ff: int
     h: int
     dropout: float
+    geometric_feature_dim: int = 19
     image_feat_dim: int = 2048  # dim of precomputed image features (ResNet50 avgpool)
     image_feat_file: str = "image_feats.pt"  # filename inside each scene dir
     container_image_feat_file: str = ""  # masked container crop feats; empty = disabled
