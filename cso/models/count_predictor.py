@@ -23,6 +23,7 @@ class CountPredictor(nn.Module):
         use_image_encoder=False,
         image_feat_dim=2048,
         use_masked_image_encoder=False,
+        use_packing_factor_head=False,
     ):
         super().__init__()
         self.use_hybrid = use_hybrid
@@ -32,6 +33,7 @@ class CountPredictor(nn.Module):
         self.use_conv3d_encoder = use_conv3d_encoder
         self.use_image_encoder = use_image_encoder
         self.use_masked_image_encoder = use_masked_image_encoder
+        self.use_packing_factor_head = use_packing_factor_head
         self.slat_dim = slat_dim
         # cross-attn only makes sense when shape latents are used
         self.use_cross_attn = use_cross_attn and use_shape_latent
@@ -52,8 +54,7 @@ class CountPredictor(nn.Module):
 
             elif self.use_conv3d_encoder:
                 # 3D CNN over the (8, 16, 16, 16) spatial volume.
-                # The shape_latent is a 16^3 voxel grid of 8-dim features — the same
-                # layout the SAM3D decoder uses internally.
+                # The shape_latent is a 16^3 voxel grid of 8-dim features
                 # Concatenate container + object along the channel dim -> (16, 16^3).
                 in_ch = slat_dim * 2  # 16 (container + object channels)
                 self.shape_encoder = nn.Sequential(
@@ -85,7 +86,6 @@ class CountPredictor(nn.Module):
                     nn.Linear(64, d_model),
                     nn.ReLU(),
                 )
-
             else:
                 # Flatten: (B, 65536) through a large linear.
                 self.shape_encoder = nn.Sequential(
@@ -127,6 +127,18 @@ class CountPredictor(nn.Module):
                 nn.Linear(image_feat_dim, d_model),
                 nn.LayerNorm(d_model),
                 nn.ReLU(),
+            )
+
+        if self.use_packing_factor_head:
+            # Separate head on raw slat features for packing factor prediction.
+            # Input: max+mean pool of container (slat_dim*2) + object (slat_dim*2) = slat_dim*4
+            # Output: scalar in (0, 1) via Sigmoid
+            self.pf_head = nn.Sequential(
+                nn.Linear(slat_dim * 4, 64),
+                nn.LayerNorm(64),
+                nn.ReLU(),
+                nn.Linear(64, 1),
+                nn.Sigmoid(),
             )
 
         # Count prediction head
@@ -277,7 +289,16 @@ class CountPredictor(nn.Module):
             features.append(self.object_image_proj(object_image_feats.float()))
 
         combined = torch.cat(features, dim=-1)
-        return self.final_activation(self.count_head(combined)).squeeze(-1)
+        count = self.final_activation(self.count_head(combined)).squeeze(-1)
+
+        if self.use_packing_factor_head:
+            combined_slat_raw = torch.cat(
+                [slat_features_container, slat_features_object], dim=-1
+            )
+            pf_pred = self.pf_head(combined_slat_raw.float()).squeeze(-1)  # (B,)
+            return count, pf_pred
+
+        return count
 
 
 def build_model(cfg: ExperimentConfig):
@@ -298,4 +319,5 @@ def build_model(cfg: ExperimentConfig):
         use_image_encoder=cfg.ablation.use_image_encoder,
         image_feat_dim=cfg.model.image_feat_dim,
         use_masked_image_encoder=cfg.ablation.use_masked_image_encoder,
+        use_packing_factor_head=cfg.ablation.use_packing_factor_head,
     )

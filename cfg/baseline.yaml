@@ -11,7 +11,7 @@ data:
 model:
   shape_latent_dim: 32768
   slat_dim: 8
-  geometric_feature_dim: 13
+  geometric_feature_dim: 16
   use_hybrid: true
   d_model: 256
   d_ff: 128
@@ -35,6 +35,7 @@ loss:
   use_l1: true
   use_mse: true
   log_scale: true
+  pf_lambda: 0.0
 
 ablation:
   use_geom: true
@@ -46,4 +47,4 @@ ablation:
   use_conv3d_encoder: false
   use_image_encoder: false
   use_masked_image_encoder: false
-  
+  use_packing_factor_head: false

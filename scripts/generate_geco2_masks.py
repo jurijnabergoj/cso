@@ -7,7 +7,7 @@ from hydra.core.global_hydra import GlobalHydra
 
 if GlobalHydra.instance().is_initialized():
     GlobalHydra.instance().clear()
-    
+
 import torch
 import gradio as gr
 from gradio_image_prompter import ImagePrompter
@@ -23,7 +23,6 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 import cv2
 import time
-import shutil
 import argparse
 
 
@@ -31,14 +30,17 @@ import argparse
 def process_image_once(inputs, enable_mask):
     model.module.return_masks = enable_mask
 
-    image = inputs['image']
-    drawn_boxes = inputs['points']
+    image = inputs["image"]
+    drawn_boxes = inputs["points"]
     image_tensor = torch.tensor(image).to(device)
     image_tensor = image_tensor.permute(2, 0, 1).float() / 255.0
-    image_tensor = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(image_tensor)
+    image_tensor = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(
+        image_tensor
+    )
 
-    bboxes_tensor = torch.tensor([[box[0], box[1], box[2], box[3]] for box in drawn_boxes], dtype=torch.float32).to(
-        device)
+    bboxes_tensor = torch.tensor(
+        [[box[0], box[1], box[2], box[3]] for box in drawn_boxes], dtype=torch.float32
+    ).to(device)
 
     img, bboxes, scale = resize_and_pad(image_tensor, bboxes_tensor, size=1024.0)
     img = img.unsqueeze(0).to(device)
@@ -67,21 +69,23 @@ def process_image_once(inputs, enable_mask):
 
 
 # **Post-process and Update Output**
-def post_process(image, outputs, masks, img, scale, drawn_boxes, enable_mask, threshold):
+def post_process(
+    image, outputs, masks, img, scale, drawn_boxes, enable_mask, threshold
+):
     idx = 0
     thr_inv = 1.0 / threshold  # keep your original intent
 
     # --- pull tensors & drop batch dim if present ---
-    pred_boxes = outputs[idx]['pred_boxes']          # [1, N, 4] or [N, 4]
-    box_v      = outputs[idx]['box_v']               # [1, N]    or [N]
+    pred_boxes = outputs[idx]["pred_boxes"]  # [1, N, 4] or [N, 4]
+    box_v = outputs[idx]["box_v"]  # [1, N]    or [N]
 
     if pred_boxes.dim() == 3 and pred_boxes.size(0) == 1:
-        pred_boxes = pred_boxes[0]                   # -> [N, 4]
+        pred_boxes = pred_boxes[0]  # -> [N, 4]
     if box_v.dim() == 2 and box_v.size(0) == 1:
-        box_v = box_v[0]                             # -> [N]
+        box_v = box_v[0]  # -> [N]
 
     # --- selection mask over N ---
-    sel = box_v > (box_v.max() / thr_inv)            # [N] bool
+    sel = box_v > (box_v.max() / thr_inv)  # [N] bool
 
     # handle no survivors cleanly
     if sel.sum().item() == 0:
@@ -94,7 +98,7 @@ def post_process(image, outputs, masks, img, scale, drawn_boxes, enable_mask, th
         w, h = image_pil.size
         sq = int(0.05 * w)
         x1, y1 = 10, h - sq - 10
-        draw.rectangle([x1, y1, x1+sq, y1+sq], outline="black", fill="black")
+        draw.rectangle([x1, y1, x1 + sq, y1 + sq], outline="black", fill="black")
         font = ImageFont.load_default()
         txt = "0"
         text_x = x1 + (sq - draw.textlength(txt, font=font)) / 2
@@ -104,8 +108,8 @@ def post_process(image, outputs, masks, img, scale, drawn_boxes, enable_mask, th
 
     # --- NMS expects [N,4] boxes and [N] scores ---
     keep = ops.nms(pred_boxes[sel], box_v[sel], 0.5)
-    pred_boxes = pred_boxes[sel][keep]               # [M,4]
-    box_v = box_v[sel][keep]                         # [M]
+    pred_boxes = pred_boxes[sel][keep]  # [M,4]
+    box_v = box_v[sel][keep]  # [M]
 
     # clamp/scale to original image coords
     pred_boxes = torch.clamp(pred_boxes, 0, 1)
@@ -128,27 +132,27 @@ def post_process(image, outputs, masks, img, scale, drawn_boxes, enable_mask, th
         else:
             raise TypeError(f"Unexpected mask type: {type(base)}")
 
-
         if masks is not None:
             masks_ = base[sel][keep]
             N_masks = masks_.shape[0]
-            indices = torch.randint(1, N_masks + 1, (1, N_masks), device=masks_.device).view(-1, 1, 1)
-            mask_lbl = (masks_ * indices).sum(dim=0) # [H, W]
+            indices = torch.randint(
+                1, N_masks + 1, (1, N_masks), device=masks_.device
+            ).view(-1, 1, 1)
+            mask_lbl = (masks_ * indices).sum(dim=0)  # [H, W]
             mask_display = (
                 T.Resize(
                     (int(img.shape[2] / scale), int(img.shape[3] / scale)),
-                    interpolation=T.InterpolationMode.NEAREST
+                    interpolation=T.InterpolationMode.NEAREST,
                 )(mask_lbl.unsqueeze(0))[0]
-            )[:image_pil.size[1], :image_pil.size[0]]
-            
+            )[: image_pil.size[1], : image_pil.size[0]]
+
             masks_orig_shape = (
                 T.Resize(
                     (int(img.shape[2] / scale), int(img.shape[3] / scale)),
-                    interpolation=T.InterpolationMode.NEAREST
+                    interpolation=T.InterpolationMode.NEAREST,
                 )(masks_)
-            )[:, :image_pil.size[1], :image_pil.size[0]]
+            )[:, : image_pil.size[1], : image_pil.size[0]]
 
-            
             cmap = plt.cm.tab20
             norm = plt.Normalize(vmin=0, vmax=N_masks)
             rgba = cmap(norm(mask_display))
@@ -169,7 +173,7 @@ def post_process(image, outputs, masks, img, scale, drawn_boxes, enable_mask, th
     w, h = image_pil.size
     sq = int(0.05 * w)
     x1, y1 = 10, h - sq - 10
-    draw.rectangle([x1, y1, x1+sq, y1+sq], outline="black", fill="black")
+    draw.rectangle([x1, y1, x1 + sq, y1 + sq], outline="black", fill="black")
     font = ImageFont.load_default()
     txt = str(len(pred_boxes))
     text_x = x1 + (sq - draw.textlength(txt, font=font)) / 2
@@ -181,34 +185,45 @@ def post_process(image, outputs, masks, img, scale, drawn_boxes, enable_mask, th
 
 def initial_process(ip_data, enable_mask_val, thr):
     # ip_data is a dict from ImagePrompter: {'image': np.ndarray, 'points': [...]}
-    image, outputs, masks, img, scale, drawn_boxes = process_image_once(ip_data, enable_mask_val)
-    out_img, n, masks_ori = post_process(image, outputs, masks, img, scale, drawn_boxes, enable_mask_val, thr)
-    return (
-        out_img, n, masks_ori,  # visible outputs
-        image, outputs, masks, img, scale, drawn_boxes  # states
+    image, outputs, masks, img, scale, drawn_boxes = process_image_once(
+        ip_data, enable_mask_val
     )
-    
+    out_img, n, masks_ori = post_process(
+        image, outputs, masks, img, scale, drawn_boxes, enable_mask_val, thr
+    )
+    return (
+        out_img,
+        n,
+        masks_ori,  # visible outputs
+        image,
+        outputs,
+        masks,
+        img,
+        scale,
+        drawn_boxes,  # states
+    )
+
 
 def get_bounding_boxes_from_mask(mask, save_dir):
     # Convert mask to uint8
     mask_uint8 = (mask * 255).astype(np.uint8)
-    
+
     # Distance transform
     distance = cv2.distanceTransform(mask_uint8, cv2.DIST_L2, 5)
-    
+
     # Find peaks
-    local_max = cv2.dilate(distance, np.ones((3,3)))
+    local_max = cv2.dilate(distance, np.ones((3, 3)))
     local_max = (distance == local_max).astype(np.uint8)
-    
+
     # Connected components as markers
-    
+
     _, markers = cv2.connectedComponents(local_max)
     markers = markers.astype(np.int32)
-    
+
     # Need a 3-channel image for watershed
     mask_bgr = cv2.cvtColor(mask_uint8, cv2.COLOR_GRAY2BGR)
     mask_ws = cv2.watershed(mask_bgr, markers)
-    
+
     # Watershed assigns -1 to boundaries
     labels = mask_ws.copy()
     labels[labels == -1] = 0
@@ -216,49 +231,47 @@ def get_bounding_boxes_from_mask(mask, save_dir):
     bboxes = []
 
     # Skip label 0 (background)
-    for label_id in range(1, labels.max()+1):
+    for label_id in range(1, labels.max() + 1):
         ys, xs = np.where(labels == label_id)
         if len(xs) == 0 or len(ys) == 0:
             continue
         x_min, x_max = xs.min(), xs.max()
         y_min, y_max = ys.min(), ys.max()
-        
+
         w, h = x_max - x_min, y_max - y_min
         area = w * h
         if 0 < area < 10000:  # tweak these thresholds for your objects
             bboxes.append((x_min, y_min, x_max, y_max))
-        
-    
+
     if len(bboxes) == 0:
         print(f"No bboxes generated for dir {save_dir}")
-    
+
     bbox_output_file = save_dir / "generated_bboxes.txt"
-    str_bboxes = [(str(x_min), str(y_min), str(x_max), str(y_max)) for (x_min, y_min, x_max, y_max) in bboxes]
+    str_bboxes = [
+        (str(x_min), str(y_min), str(x_max), str(y_max))
+        for (x_min, y_min, x_max, y_max) in bboxes
+    ]
 
     with open(bbox_output_file, "w") as file:
         for line in str_bboxes:
             file.write(" ".join(line) + "\n")
-        
-    return bboxes
-  
 
-def prepare_seg_image(path, type):    
+    return bboxes
+
+
+def prepare_seg_image(path, type):
     mask = Image.open(path).convert("L")
-    
+
     if type == "floor":
         mask = ImageOps.invert(mask)
-    
+
     mask = np.array(mask)
     mask = (mask > 0).astype(np.uint8) * 255
     return mask
 
 
 # Save the mask and the predicted bbox
-def save_data(save_dir, image, obj_mask, box_mask, bbox):
-    # if the dir already exists, delete it
-    if (data_dir / category / "geco2_mask").exists():
-        shutil.rmtree(data_dir / category / "geco2_mask")
-    
+def save_data(save_dir, image, obj_mask, box_mask, container_mask, bbox):
     os.makedirs(save_dir, exist_ok=True)
 
     np.save(save_dir / "image.npy", image)
@@ -268,23 +281,28 @@ def save_data(save_dir, image, obj_mask, box_mask, bbox):
     np.save(save_dir / "obj_mask.npy", obj_mask)
     obj_mask_pil = Image.fromarray(obj_mask, mode="L")
     obj_mask_pil.save(save_dir / "obj_mask.png")
-    
+
     np.save(save_dir / "box_mask.npy", box_mask)
     box_mask_pil = Image.fromarray(box_mask, mode="L")
     box_mask_pil.save(save_dir / "box_mask.png")
 
+    # Container-only mask from box_seg (no objects inside)
+    np.save(save_dir / "container_mask.npy", container_mask)
+    container_mask_pil = Image.fromarray(container_mask, mode="L")
+    container_mask_pil.save(save_dir / "container_mask.png")
+
     np.save(save_dir / "bbox.npy", bbox)
-    
+
 
 # Extract output sam2 mask and best predicted bbox
 def extract_mask_and_bbox(outputs, masks_tensor, image):
     masks = np.array(masks_tensor.detach().cpu().numpy())
-    scores = np.array(outputs[0]['scores'].detach().cpu().numpy())[0]
-    
+    scores = np.array(outputs[0]["scores"].detach().cpu().numpy())[0]
+
     N = min(len(scores), masks.shape[0])
     scores = scores[:N]
     masks = masks[:N, :, :]
-    
+
     max_scores_ind = np.argmax(scores, axis=-1).item()
 
     # max_ind = np.argmax(np.array(outputs[0]['scores']), axis=-1).item()
@@ -292,7 +310,7 @@ def extract_mask_and_bbox(outputs, masks_tensor, image):
 
     mask = masks[max_scores_ind, :, :].astype(np.uint8) * 255
 
-    bboxes_tensor = outputs[0]['pred_boxes'].squeeze(0).detach().cpu().numpy()
+    bboxes_tensor = outputs[0]["pred_boxes"].squeeze(0).detach().cpu().numpy()
     bbox_norm = np.array(bboxes_tensor[max_scores_ind])
 
     H, W = image.shape[:2]
@@ -306,74 +324,119 @@ def extract_mask_and_bbox(outputs, masks_tensor, image):
     return mask, bbox_px
 
 
-def get_last_common_frame(obj_seg_dir, floor_seg_dir):
-    obj_files = sorted(os.listdir(obj_seg_dir))
-    floor_files = set(os.listdir(floor_seg_dir))  # O(1) lookup
+def get_best_frame(image_dir, obj_seg_dir, floor_seg_dir, box_seg_dir):
+    """Pick the frame with maximum visible object pixels.
 
-    # Start from last object frame and walk backwards
-    for f in reversed(obj_files):
-        frame_id = f[-8:-4]  # "0010" from Objects_Mask0010.png
-        candidate = f"Ground_Mask{frame_id}.png"
-        if candidate in floor_files:
-            return f, candidate, frame_id
+    Requires all four corresponding files to exist:
+      images/RGB{id}.jpg, obj_seg/Objects_Mask{id}.png,
+      floor_seg/Ground_Mask{id}.png, box_seg/Box_Mask{id}.png
+    """
+    obj_files = sorted(Path(obj_seg_dir).iterdir())
+    floor_files = {f.name for f in Path(floor_seg_dir).iterdir()}
+    box_files = {f.name for f in Path(box_seg_dir).iterdir()}
 
-    raise RuntimeError("No common frame found")
+    best_frame_id = None
+    best_score = -1
 
-    
+    for obj_file in obj_files:
+        frame_id = obj_file.stem[-4:]  # "0010" from Objects_Mask0010.png
+        ground_name = f"Ground_Mask{frame_id}.png"
+        box_name = f"Box_Mask{frame_id}.png"
+        rgb_name = f"RGB{frame_id}.jpg"
+
+        if ground_name not in floor_files:
+            continue
+        if box_name not in box_files:
+            continue
+        if not (Path(image_dir) / rgb_name).exists():
+            continue
+
+        obj_mask = np.array(Image.open(obj_file).convert("L"))
+        score = int((obj_mask > 0).sum())  # number of visible object pixels
+        if score > best_score:
+            best_score = score
+            best_frame_id = frame_id
+
+    if best_frame_id is None:
+        raise RuntimeError(f"No valid frame found in {obj_seg_dir}")
+
+    return (
+        f"Objects_Mask{best_frame_id}.png",
+        f"Ground_Mask{best_frame_id}.png",
+        f"Box_Mask{best_frame_id}.png",
+        f"RGB{best_frame_id}.jpg",
+        best_frame_id,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, required=True)
     args = parser.parse_args()
-    
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_args = get_argparser().parse_known_args()[0]
     model_args.zero_shot = False
     model = DataParallel(build_model(model_args).to(device))
-    model.load_state_dict(torch.load('ext/GECO2/CNTQG_multitrain_ca44.pth', weights_only=True)['model'], strict=False)
+    model.load_state_dict(
+        torch.load("ext/GECO2/CNTQG_multitrain_ca44.pth", weights_only=True)["model"],
+        strict=False,
+    )
     model.eval()
-    
+
     num_empty_bboxes = 0
     start_time = time.time()
     data_dir = args.data_dir
 
     for category in os.listdir(data_dir):
         print(f"Processing category {category}")
-        
+
         image_dir = data_dir / category / "images"
         obj_seg_dir = data_dir / category / "obj_seg"
         floor_seg_dir = data_dir / category / "floor_seg"
-        
-        if not os.path.exists(image_dir):
-            print(f"No images found for category {category}")
-            continue
-        
-        if not os.path.exists(obj_seg_dir):
-            print(f"No object segmentations found for category {category}")
-            continue
-        
-        if not os.path.exists(floor_seg_dir):
-            print(f"No floor segmentations found for category {category}")
-            continue
-        
-        # take 10th frame
-        # TODO: get frame with best visibility of objects and container
-        if os.path.exists(obj_seg_dir / "Objects_Mask0010.png") and os.path.exists(floor_seg_dir / "Ground_Mask0010.png") and os.path.exists(image_dir / "RGB0010.jpg"):
-            image_frame = "RGB0010.jpg"
-            obj_frame = "Objects_Mask0010.png"
-            ground_frame = "Ground_Mask0010.png"
+        box_seg_dir = data_dir / category / "box_seg"
+
+        for d, label in [
+            (image_dir, "images"),
+            (obj_seg_dir, "obj_seg"),
+            (floor_seg_dir, "floor_seg"),
+            (box_seg_dir, "box_seg"),
+        ]:
+            if not d.exists():
+                print(f"  skip {category}: missing {label}/")
+                break
         else:
-            # else take last available frame
-            obj_frame, ground_frame, frame_id = get_last_common_frame(obj_seg_dir, floor_seg_dir)
-            image_frame = "RGB" + frame_id + ".jpg"
-        
+            pass  # all dirs exist, continue below
+
+        if not all(
+            d.exists() for d in [image_dir, obj_seg_dir, floor_seg_dir, box_seg_dir]
+        ):
+            continue
+
+        try:
+            obj_frame, ground_frame, box_frame, image_frame, frame_id = get_best_frame(
+                image_dir, obj_seg_dir, floor_seg_dir, box_seg_dir
+            )
+        except RuntimeError as e:
+            print(f"  skip {category}: {e}")
+            continue
+
+        print(f"  best frame: {frame_id}")
+
         image_path = image_dir / image_frame
         obj_seg_path = obj_seg_dir / obj_frame
         floor_seg_path = floor_seg_dir / ground_frame
+        box_seg_path = box_seg_dir / box_frame
 
         image_rgba = np.array(Image.open(image_path).convert("RGBA"))
         obj_mask = prepare_seg_image(obj_seg_path, type="obj")
-        box_mask = prepare_seg_image(floor_seg_path, type="floor")
-        
+        box_mask = prepare_seg_image(
+            floor_seg_path, type="floor"
+        )  # container+objects (inverted ground)
+        container_mask = prepare_seg_image(
+            box_seg_path, type="obj"
+        )  # container walls only
+
         bboxes = get_bounding_boxes_from_mask(obj_mask, data_dir / category)
 
         bboxes_file_path = data_dir / category / "generated_bboxes.txt"
@@ -381,32 +444,48 @@ if __name__ == "__main__":
 
         with open(bboxes_file_path, "r") as file:
             for line in file:
-                points.append([int(n) for n in line.strip().split(' ')])
-            
+                points.append([int(n) for n in line.strip().split(" ")])
+
         if len(points) == 0:
             print(f"No points found for category {category}, skipping")
             num_empty_bboxes = num_empty_bboxes + 1
             continue
 
         enable_mask = True
-        threshold = 0.5        
-        input = {
-            'image': image_rgba[:,:,:-1],
-            'points': points
-        }
+        threshold = 0.5
+        input = {"image": image_rgba[:, :, :-1], "points": points}
 
         try:
-            out_img, n, masks_ori_tensor, image, outputs, masks, img, scale, drawn_boxes = initial_process(input, enable_mask, threshold)
+            (
+                out_img,
+                n,
+                masks_ori_tensor,
+                image,
+                outputs,
+                masks,
+                img,
+                scale,
+                drawn_boxes,
+            ) = initial_process(input, enable_mask, threshold)
         except:
             print(f"Error processing category {category}")
-        
-        single_obj_mask, single_obj_bbox = extract_mask_and_bbox(outputs, masks_ori_tensor, image)
-        
+
+        single_obj_mask, single_obj_bbox = extract_mask_and_bbox(
+            outputs, masks_ori_tensor, image
+        )
+
         save_dir = data_dir / category / "geco2_data"
-        save_data(save_dir, image_rgba, single_obj_mask, box_mask, single_obj_bbox)
-    
+        save_data(
+            save_dir,
+            image_rgba,
+            single_obj_mask,
+            box_mask,
+            container_mask,
+            single_obj_bbox,
+        )
+
     time_to_finish = time.time() - start_time
-    
+
     print(f"Number of all categories: {len(os.listdir(data_dir))}")
     print(f"{num_empty_bboxes} categories with no bboxes found")
     print(f"Time to finish: {time_to_finish} seconds")

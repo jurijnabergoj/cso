@@ -5,8 +5,10 @@
 #SBATCH --time=12:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=8
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.err
+#SBATCH --output=logs/run-training/%x_%j.out
+#SBATCH --error=logs/run-training/%x_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=jurijn1@gmail.com
 
 # environment
 module load CUDA/12.1.1

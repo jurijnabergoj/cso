@@ -48,6 +48,7 @@ class LossConfig:
     use_l1: bool
     use_mse: bool
     log_scale: bool
+    pf_lambda: float = 0.0  # weight for auxiliary packing-factor MSE loss; 0 = disabled
 
 
 @dataclass
@@ -63,6 +64,7 @@ class AblationConfig:
     use_masked_image_encoder: bool = (
         False  # separate masked crops for container + object
     )
+    use_packing_factor_head: bool = False  # auxiliary pf head on slat features
 
 
 @dataclass

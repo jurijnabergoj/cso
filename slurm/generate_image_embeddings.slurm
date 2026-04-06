@@ -6,8 +6,8 @@
 #SBATCH --time=4:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=4
-#SBATCH --output=logs/%x_%A_%a.out
-#SBATCH --error=logs/%x_%A_%a.err
+#SBATCH --output=logs/img-embed/%x_%A_%a.out
+#SBATCH --error=logs/img-embed/%x_%A_%a.err
 
 # environment
 module load CUDA/12.1.1

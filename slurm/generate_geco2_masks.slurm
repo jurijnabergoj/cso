@@ -6,8 +6,8 @@
 #SBATCH --time=12:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=8
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.err
+#SBATCH --output=logs/geco2-masks/%x_%j.out
+#SBATCH --error=logs/geco2-masks/%x_%j.err
 
 # ---------------------------
 # Safety & debug

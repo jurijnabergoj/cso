@@ -39,6 +39,7 @@ def initialize_dataloader(cfg: ExperimentConfig):
     feat_file = cfg.model.image_feat_file
     cont_file = cfg.model.container_image_feat_file
     obj_file = cfg.model.object_image_feat_file
+
     train_dataset = CountDataset(
         cfg.data.train_dirs,
         image_feat_file=feat_file,
@@ -150,6 +151,11 @@ def train(cfg: ExperimentConfig, train_loader, val_loader, model, device):
             )
 
             geom_feat = sample["geom_features"].to(device, non_blocking=True)
+            pixel_feats = sample.get("pixel_feats")
+            if pixel_feats is not None:
+                geom_feat = torch.cat(
+                    [geom_feat, pixel_feats.to(device, non_blocking=True)], dim=-1
+                )
 
             # Geometric estimate
             cont_scale = (
@@ -188,6 +194,13 @@ def train(cfg: ExperimentConfig, train_loader, val_loader, model, device):
                 )
                 pred_count = result[0] if isinstance(result, tuple) else result
                 loss = loss_fn(pred_count.float(), true_count, cfg)
+
+                if isinstance(result, tuple) and cfg.loss.pf_lambda > 0:
+                    true_pf = sample.get("packing_factor")
+                    if true_pf is not None:
+                        true_pf = true_pf.to(device, non_blocking=True)
+                        pf_loss = nn.MSELoss()(result[1].float(), true_pf)
+                        loss = loss + cfg.loss.pf_lambda * pf_loss
 
             # Handle NaN/Inf losses safely when training with DDP. In DDP every process must run backward() so that gradient all-reduce
             # synchronization can complete. If one process skips backward(), the others
@@ -269,6 +282,12 @@ def train(cfg: ExperimentConfig, train_loader, val_loader, model, device):
                         geom_feat = sample["geom_features"].to(
                             device, non_blocking=True
                         )
+                        pixel_feats = sample.get("pixel_feats")
+                        if pixel_feats is not None:
+                            geom_feat = torch.cat(
+                                [geom_feat, pixel_feats.to(device, non_blocking=True)],
+                                dim=-1,
+                            )
 
                         cont_scale = (
                             container_out["scale"]

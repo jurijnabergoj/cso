@@ -1,4 +1,6 @@
 from torch.utils.data import Dataset
+from PIL import Image
+import json
 import numpy as np
 import torch
 from pathlib import Path
@@ -24,7 +26,12 @@ class CountDataset(Dataset):
         self.samples = []
         for dir in self.data_dirs:
             self.samples.extend(
-                [d for d in dir.iterdir() if (d / "embeddings.pt").exists()]
+                [
+                    d
+                    for d in dir.iterdir()
+                    if (d / "sam3d_data" / "embeddings.pt").exists()
+                    or (d / "embeddings.pt").exists()
+                ]
             )
         self.samples = sorted(self.samples)
 
@@ -36,7 +43,10 @@ class CountDataset(Dataset):
         return len(self.samples)
 
     def _load(self, idx):
-        path = self.samples[idx] / "embeddings.pt"
+        sam3d_path = self.samples[idx] / "sam3d_data" / "embeddings.pt"
+        path = (
+            sam3d_path if sam3d_path.exists() else self.samples[idx] / "embeddings.pt"
+        )
         try:
             data = torch.load(path, map_location="cpu", weights_only=False)
         except Exception as e:
@@ -54,14 +64,53 @@ class CountDataset(Dataset):
             if not filename:
                 return None
             p = self.samples[idx] / filename
-            return (
-                torch.load(p, map_location="cpu", weights_only=True)
-                if p.exists()
-                else None
-            )
+            if not p.exists():
+                return None
+            feat = torch.load(p, map_location="cpu", weights_only=True)
+            # Mean-pool instance features (k, D) -> (D,)
+            if feat.dim() == 2:
+                feat = feat.float().mean(dim=0)
+            return feat
 
         container_image_feats = _load_features(self.container_image_feat_file)
         object_image_feats = _load_features(self.object_image_feat_file)
+
+        # Pixel area features: log container px, log mean object px, log ratio
+        scene = self.samples[idx]
+        frame_id_path = scene / "sam_data" / "frame_id.txt"
+        inst_px_path = scene / "sam_data" / "instance_px.pt"
+
+        # Use obj_seg pile mask (filled interior) for container pixel area
+        cont_px = 0.0
+        if frame_id_path.exists():
+            fid = frame_id_path.read_text().strip()
+            pile_mask_path = scene / "obj_seg" / f"Objects_Mask{fid}.png"
+            if pile_mask_path.exists():
+                cont_px = float(
+                    (np.array(Image.open(pile_mask_path).convert("L")) > 0).sum()
+                )
+
+        obj_px = 0.0
+        if inst_px_path.exists():
+            try:
+                inst_px = torch.load(
+                    inst_px_path, map_location="cpu", weights_only=True
+                )
+                obj_px = float(inst_px.float().mean().item())
+            except Exception:
+                pass
+
+        pixel_feats = _compute_pixel_feats(cont_px, obj_px)
+
+        # Packing factor from simulation ground truth (volume_ratio_no_edges)
+        packing_factor = None
+        sim_path = scene / "simulation_results.json"
+        if sim_path.exists():
+            with open(sim_path) as f:
+                sim = json.load(f)
+            pf = sim.get("volume_ratio_no_edges")
+            if pf is not None:
+                packing_factor = torch.tensor(float(pf), dtype=torch.float32)
 
         return {
             "container_outputs": data["container"],
@@ -72,6 +121,8 @@ class CountDataset(Dataset):
             "image_feats": image_feats,
             "container_image_feats": container_image_feats,
             "object_image_feats": object_image_feats,
+            "pixel_feats": pixel_feats,
+            "packing_factor": packing_factor,
             "sample_name": self.samples[idx].name,
         }
 
@@ -87,6 +138,13 @@ def _pool_slat(x):
     (N, D) slat tensor -> (2*D,) vector.
     """
     return torch.cat([x.max(dim=0)[0], x.mean(dim=0)], dim=-1)
+
+
+def _compute_pixel_feats(cont_px: float, obj_px: float) -> torch.Tensor:
+    log_cont = float(np.log(cont_px + 1))
+    log_obj = float(np.log(obj_px + 1))
+    log_ratio = log_cont - log_obj
+    return torch.tensor([log_cont, log_obj, log_ratio], dtype=torch.float32)
 
 
 def collate_fn(batch):
@@ -137,6 +195,12 @@ def collate_fn(batch):
         "object_image_feats": (
             torch.stack([b["object_image_feats"] for b in batch])
             if all(b["object_image_feats"] is not None for b in batch)
+            else None
+        ),
+        "pixel_feats": torch.stack([b["pixel_feats"] for b in batch]),
+        "packing_factor": (
+            torch.stack([b["packing_factor"] for b in batch])
+            if all(b["packing_factor"] is not None for b in batch)
             else None
         ),
         "sample_name": [b["sample_name"] for b in batch],
