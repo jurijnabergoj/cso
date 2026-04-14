@@ -1028,8 +1028,128 @@ R14 = {
     ],
 }
 
+# Round 15: clean geom features + slat cross-attention + image features in pf_head
+# Three improvements over R12 best (pf_noslat_l10 = 127.43 MAE):
+#   1. clean_geom: replace 13-dim legacy geom (many redundant) with 6 clean features
+#      including voxel count ratio (r=0.42 with count, much better than scale^3 r=0.07).
+#      With pixel_feats disabled (only added when use_clean_geom=False), geom_dim=6.
+#   2. slat_cross_attn: cross-attention between 256 subsampled voxels of container and
+#      object slat sequences. Object queries container → 64-dim geometric summary.
+#   3. image_in_pf_head: pf_head additionally receives DINOv2 container+obj crops (via
+#      small 64-dim projections), so pf prediction sees both geometry and appearance.
+# Ablation design: isolate each change to measure individual contribution.
+R15 = {
+    "group": "exp14_clean_geom",
+    "experiments": [
+        {
+            # Baseline pf_noslat_l10 with 6-dim clean geom instead of 16-dim legacy.
+            # pixel_feats NOT appended (use_clean_geom=True bypasses the concat).
+            # model.geometric_feature_dim must be 6 to match.
+            "name": "clean_geom_pf",
+            "ablation.use_shape_latent": False,
+            "ablation.use_slat": False,
+            "ablation.use_packing_factor_head": True,
+            "ablation.use_slat_cross_attn": False,
+            "ablation.use_clean_geom": True,
+            "ablation.use_image_in_pf_head": False,
+            "ablation.use_image_encoder": True,
+            "ablation.use_masked_image_encoder": True,
+            "model.geometric_feature_dim": 6,
+            "model.image_feat_dim": 384,
+            "model.image_feat_file": "sam_data/dinov2_s_feats.pt",
+            "model.container_image_feat_file": "sam_data/dinov2_s_container_feats.pt",
+            "model.object_image_feat_file": "sam_data/dinov2_s_instance_feats.pt",
+            "model.use_hybrid": False,
+            "loss.log_scale": True,
+            "loss.pf_lambda": 1.0,
+            "train.weight_decay": 0.05,
+            "model.dropout": 0.2,
+            "train.patience": 10,
+            "train.epochs": 200,
+            "train.save_checkpoints": False,
+        },
+        {
+            # clean_geom + slat cross-attention (object queries container geometry).
+            # Adds 64-dim geometric summary to the count head.
+            "name": "slat_cross_pf",
+            "ablation.use_shape_latent": False,
+            "ablation.use_slat": False,
+            "ablation.use_packing_factor_head": True,
+            "ablation.use_slat_cross_attn": True,
+            "ablation.use_clean_geom": True,
+            "ablation.use_image_in_pf_head": False,
+            "ablation.use_image_encoder": True,
+            "ablation.use_masked_image_encoder": True,
+            "model.geometric_feature_dim": 6,
+            "model.image_feat_dim": 384,
+            "model.image_feat_file": "sam_data/dinov2_s_feats.pt",
+            "model.container_image_feat_file": "sam_data/dinov2_s_container_feats.pt",
+            "model.object_image_feat_file": "sam_data/dinov2_s_instance_feats.pt",
+            "model.use_hybrid": False,
+            "loss.log_scale": True,
+            "loss.pf_lambda": 1.0,
+            "train.weight_decay": 0.05,
+            "model.dropout": 0.2,
+            "train.patience": 10,
+            "train.epochs": 200,
+            "train.save_checkpoints": False,
+        },
+        {
+            # clean_geom + image features in pf_head (DINOv2 container+obj crops).
+            # pf_head input: slat_pool(32) + cont_proj(64) + obj_proj(64) = 160-dim.
+            "name": "imgpf_clean_geom",
+            "ablation.use_shape_latent": False,
+            "ablation.use_slat": False,
+            "ablation.use_packing_factor_head": True,
+            "ablation.use_slat_cross_attn": False,
+            "ablation.use_clean_geom": True,
+            "ablation.use_image_in_pf_head": True,
+            "ablation.use_image_encoder": True,
+            "ablation.use_masked_image_encoder": True,
+            "model.geometric_feature_dim": 6,
+            "model.image_feat_dim": 384,
+            "model.image_feat_file": "sam_data/dinov2_s_feats.pt",
+            "model.container_image_feat_file": "sam_data/dinov2_s_container_feats.pt",
+            "model.object_image_feat_file": "sam_data/dinov2_s_instance_feats.pt",
+            "model.use_hybrid": False,
+            "loss.log_scale": True,
+            "loss.pf_lambda": 1.0,
+            "train.weight_decay": 0.05,
+            "model.dropout": 0.2,
+            "train.patience": 10,
+            "train.epochs": 200,
+            "train.save_checkpoints": False,
+        },
+        {
+            # Full package: clean_geom + slat cross-attn + image in pf_head.
+            "name": "full_package",
+            "ablation.use_shape_latent": False,
+            "ablation.use_slat": False,
+            "ablation.use_packing_factor_head": True,
+            "ablation.use_slat_cross_attn": True,
+            "ablation.use_clean_geom": True,
+            "ablation.use_image_in_pf_head": True,
+            "ablation.use_image_encoder": True,
+            "ablation.use_masked_image_encoder": True,
+            "model.geometric_feature_dim": 6,
+            "model.image_feat_dim": 384,
+            "model.image_feat_file": "sam_data/dinov2_s_feats.pt",
+            "model.container_image_feat_file": "sam_data/dinov2_s_container_feats.pt",
+            "model.object_image_feat_file": "sam_data/dinov2_s_instance_feats.pt",
+            "model.use_hybrid": False,
+            "loss.log_scale": True,
+            "loss.pf_lambda": 1.0,
+            "train.weight_decay": 0.05,
+            "model.dropout": 0.2,
+            "train.patience": 10,
+            "train.epochs": 200,
+            "train.save_checkpoints": False,
+        },
+    ],
+}
+
 # Active round
 # Change when starting a new round.
-ACTIVE = R14
+ACTIVE = R15
 GROUP = ACTIVE["group"]
 EXPERIMENTS = ACTIVE["experiments"]

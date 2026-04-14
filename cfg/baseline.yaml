@@ -48,3 +48,6 @@ ablation:
   use_image_encoder: false
   use_masked_image_encoder: false
   use_packing_factor_head: false
+  use_slat_cross_attn: false
+  use_clean_geom: false
+  use_image_in_pf_head: false

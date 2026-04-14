@@ -3,11 +3,13 @@ import torch.nn as nn
 from cfg.configs import ExperimentConfig
 from cso.models.attention.cross_attention import CrossAttentionBlock
 
+_SLAT_CROSS_DIM = 64   # hidden dim for slat cross-attention branch
+
 
 class CountPredictor(nn.Module):
     def __init__(
         self,
-        shape_latent_dim=4096 * 8,  # 4096 tokens × 8 dims = 32768
+        shape_latent_dim=4096 * 8,
         slat_dim=8,
         geometric_feature_dim=13,
         d_model=256,
@@ -24,6 +26,8 @@ class CountPredictor(nn.Module):
         image_feat_dim=2048,
         use_masked_image_encoder=False,
         use_packing_factor_head=False,
+        use_slat_cross_attn=False,
+        use_image_in_pf_head=False,
     ):
         super().__init__()
         self.use_hybrid = use_hybrid
@@ -34,140 +38,107 @@ class CountPredictor(nn.Module):
         self.use_image_encoder = use_image_encoder
         self.use_masked_image_encoder = use_masked_image_encoder
         self.use_packing_factor_head = use_packing_factor_head
+        self.use_slat_cross_attn = use_slat_cross_attn
+        self.use_image_in_pf_head = use_image_in_pf_head
         self.slat_dim = slat_dim
-        # cross-attn only makes sense when shape latents are used
         self.use_cross_attn = use_cross_attn and use_shape_latent
 
-        # shape_latent is (4096, 8) = (16^3, slat_dim), so grid_size=16
-        num_tokens = shape_latent_dim // slat_dim  # 32768 // 8 = 4096
-        self.grid_size = round(num_tokens ** (1 / 3))  # 16
+        num_tokens = shape_latent_dim // slat_dim
+        self.grid_size = round(num_tokens ** (1 / 3))
 
+        # shape latent branch
         if self.use_shape_latent:
             if self.use_cross_attn:
-                self.cross_attn = CrossAttentionBlock(
-                    d_model=d_model, h=h, d_ff=d_ff, dropout=dropout
-                )
-                # Learned attention pooling: scores each token, takes weighted sum
+                self.cross_attn = CrossAttentionBlock(d_model=d_model, h=h, d_ff=d_ff, dropout=dropout)
                 self.attn_pool = nn.Linear(d_model, 1)
-                # Projects each raw 8-dim token to d_model after local avg pooling
                 self.linear_proj = nn.Linear(slat_dim, d_model)
-
             elif self.use_conv3d_encoder:
-                # 3D CNN over the (8, 16, 16, 16) spatial volume.
-                # The shape_latent is a 16^3 voxel grid of 8-dim features
-                # Concatenate container + object along the channel dim -> (16, 16^3).
-                in_ch = slat_dim * 2  # 16 (container + object channels)
+                in_ch = slat_dim * 2
                 self.shape_encoder = nn.Sequential(
-                    nn.Conv3d(
-                        in_ch, 32, kernel_size=3, padding=1
-                    ),  # (B, 32, 16, 16, 16)
-                    nn.GroupNorm(8, 32),
-                    nn.ReLU(),
-                    nn.Conv3d(32, 64, kernel_size=3, padding=1),  # (B, 64, 16, 16, 16)
-                    nn.GroupNorm(8, 64),
-                    nn.ReLU(),
-                    nn.MaxPool3d(2),  # (B, 64,  8,  8,  8)
-                    nn.Conv3d(64, 64, kernel_size=3, padding=1),  # (B, 64,  8,  8,  8)
-                    nn.GroupNorm(8, 64),
-                    nn.ReLU(),
-                    nn.AdaptiveAvgPool3d(1),  # (B, 64,  1,  1,  1)
-                    nn.Flatten(),  # (B, 64)
-                    nn.Linear(64, d_model),
-                    nn.ReLU(),
+                    nn.Conv3d(in_ch, 32, kernel_size=3, padding=1),
+                    nn.GroupNorm(8, 32), nn.ReLU(),
+                    nn.Conv3d(32, 64, kernel_size=3, padding=1),
+                    nn.GroupNorm(8, 64), nn.ReLU(),
+                    nn.MaxPool3d(2),
+                    nn.Conv3d(64, 64, kernel_size=3, padding=1),
+                    nn.GroupNorm(8, 64), nn.ReLU(),
+                    nn.AdaptiveAvgPool3d(1), nn.Flatten(),
+                    nn.Linear(64, d_model), nn.ReLU(),
                 )
-
             elif self.use_stats_encoder:
-                # Global mean + std + max over 4096 tokens per shape.
-                stats_dim = 3 * slat_dim * 2  # 48 for default config
+                stats_dim = 3 * slat_dim * 2
                 self.shape_encoder = nn.Sequential(
-                    nn.Linear(stats_dim, 64),
-                    nn.LayerNorm(64),
-                    nn.ReLU(),
-                    nn.Linear(64, d_model),
-                    nn.ReLU(),
+                    nn.Linear(stats_dim, 64), nn.LayerNorm(64), nn.ReLU(),
+                    nn.Linear(64, d_model), nn.ReLU(),
                 )
             else:
-                # Flatten: (B, 65536) through a large linear.
                 self.shape_encoder = nn.Sequential(
-                    nn.Linear(shape_latent_dim * 2, 512),
-                    nn.LayerNorm(512),
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(512, d_model),
-                    nn.ReLU(),
+                    nn.Linear(shape_latent_dim * 2, 512), nn.LayerNorm(512), nn.ReLU(),
+                    nn.Dropout(0.1), nn.Linear(512, d_model), nn.ReLU(),
                 )
 
+        # slat pooling branch (for count head)
         if self.use_slat:
             self.slat_encoder = nn.Sequential(
-                nn.Linear(slat_dim * 4, 128),
-                nn.LayerNorm(128),
-                nn.ReLU(),
-                nn.Linear(128, 128),
-                nn.ReLU(),
+                nn.Linear(slat_dim * 4, 128), nn.LayerNorm(128), nn.ReLU(),
+                nn.Linear(128, 128), nn.ReLU(),
             )
 
+        # slat cross-attention branch (geometric container-object relation)
+        if self.use_slat_cross_attn:
+            self.slat_seq_proj = nn.Linear(slat_dim, _SLAT_CROSS_DIM)
+            self.slat_cross_attn_block = CrossAttentionBlock(
+                d_model=_SLAT_CROSS_DIM, h=4, d_ff=_SLAT_CROSS_DIM * 2, dropout=dropout
+            )
+            self.slat_cross_attn_pool = nn.Linear(_SLAT_CROSS_DIM, 1)
+
+        # image encoder branches
         if self.use_image_encoder:
-            # Whole image features
-            # global embedding from ResNet50 avgpool or DINOv2 CLS
             self.image_proj = nn.Sequential(
-                nn.Linear(image_feat_dim, d_model),
-                nn.LayerNorm(d_model),
-                nn.ReLU(),
+                nn.Linear(image_feat_dim, d_model), nn.LayerNorm(d_model), nn.ReLU(),
             )
 
         if self.use_masked_image_encoder:
-            # Object specific features
-            # local embeddings for container and single object
             self.container_image_proj = nn.Sequential(
-                nn.Linear(image_feat_dim, d_model),
-                nn.LayerNorm(d_model),
-                nn.ReLU(),
+                nn.Linear(image_feat_dim, d_model), nn.LayerNorm(d_model), nn.ReLU(),
             )
             self.object_image_proj = nn.Sequential(
-                nn.Linear(image_feat_dim, d_model),
-                nn.LayerNorm(d_model),
-                nn.ReLU(),
+                nn.Linear(image_feat_dim, d_model), nn.LayerNorm(d_model), nn.ReLU(),
             )
 
+        # packing factor head
         if self.use_packing_factor_head:
-            # Separate head on raw slat features for packing factor prediction.
-            # Input: max+mean pool of container (slat_dim*2) + object (slat_dim*2) = slat_dim*4
-            # Output: scalar in (0, 1) via Sigmoid
+            pf_input_dim = slat_dim * 4
+            if self.use_image_in_pf_head and self.use_masked_image_encoder:
+                pf_input_dim += 2 * 64
+                self.pf_cont_proj = nn.Sequential(nn.Linear(image_feat_dim, 64), nn.ReLU())
+                self.pf_obj_proj = nn.Sequential(nn.Linear(image_feat_dim, 64), nn.ReLU())
             self.pf_head = nn.Sequential(
-                nn.Linear(slat_dim * 4, 64),
-                nn.LayerNorm(64),
-                nn.ReLU(),
-                nn.Linear(64, 1),
-                nn.Sigmoid(),
+                nn.Linear(pf_input_dim, 64), nn.LayerNorm(64), nn.ReLU(),
+                nn.Linear(64, 1), nn.Sigmoid(),
             )
 
-        # Count prediction head
+        # count head
         input_dim = geometric_feature_dim
         if self.use_shape_latent:
             input_dim += d_model
         if self.use_slat:
             input_dim += 128
+        if self.use_slat_cross_attn:
+            input_dim += _SLAT_CROSS_DIM
         if use_hybrid:
-            input_dim += 1  # log1p(geom_estimate)
+            input_dim += 1
         if use_image_encoder:
             input_dim += d_model
         if use_masked_image_encoder:
-            input_dim += 2 * d_model  # container + object projections
+            input_dim += 2 * d_model
 
         self.count_head = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.LayerNorm(256),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
-            nn.ReLU(),
+            nn.Linear(input_dim, 256), nn.LayerNorm(256), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(256, 128), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(128, 64), nn.ReLU(),
+            nn.Linear(64, 1), nn.ReLU(),
         )
-
         self.final_activation = nn.ReLU()
 
     def forward(
@@ -181,109 +152,68 @@ class CountPredictor(nn.Module):
         image_feats=None,
         container_image_feats=None,
         object_image_feats=None,
+        slat_seq_container=None,
+        slat_seq_object=None,
     ):
-        """
-        Args:
-            shape_latent_container: (B, 4096, 8)
-            shape_latent_object: (B, 4096, 8)
-            slat_features_container: (B, 16)
-            slat_features_object: (B, 16)
-            geometric_features: (B, feature_dim)
-            geometric_estimate: (B,) - baseline count estimate
-            image_feats: (B, image_feat_dim) - scene-level image features, optional
-            container_image_feats: (B, image_feat_dim) - masked container crop features, optional
-            object_image_feats: (B, image_feat_dim) - masked object crop features, optional
-        """
         B = shape_latent_container.shape[0]
-        G = self.grid_size  # 16
-        C = self.slat_dim  # 8
+        G = self.grid_size
+        C = self.slat_dim
         features = []
 
         if self.use_shape_latent:
             if self.use_cross_attn:
-                # Local avg pool: average groups of 8 consecutive tokens before projecting.
-                query_down = shape_latent_object.view(B, 512, 8, C).mean(
-                    dim=2
-                )  # (B, 512, 8)
-                memory_down = shape_latent_container.view(B, 512, 8, C).mean(
-                    dim=2
-                )  # (B, 512, 8)
-                query_tokens = self.linear_proj(query_down)  # (B, 512, d_model)
-                memory_tokens = self.linear_proj(memory_down)  # (B, 512, d_model)
-
-                tokens = self.cross_attn(
-                    query_tokens, memory_tokens
-                )  # (B, 512, d_model)
-
-                weights = torch.softmax(
-                    self.attn_pool(tokens).float(), dim=1
-                )  # (B, 512, 1)
-                pooled_tokens = (tokens.float() * weights).sum(dim=1)  # (B, d_model)
-                features.append(pooled_tokens)
-
+                query_down = shape_latent_object.view(B, 512, 8, C).mean(dim=2)
+                memory_down = shape_latent_container.view(B, 512, 8, C).mean(dim=2)
+                query_tokens = self.linear_proj(query_down)
+                memory_tokens = self.linear_proj(memory_down)
+                tokens = self.cross_attn(query_tokens, memory_tokens)
+                weights = torch.softmax(self.attn_pool(tokens).float(), dim=1)
+                features.append((tokens.float() * weights).sum(dim=1))
             elif self.use_conv3d_encoder:
-                # Reshape (B, G^3, C) → (B, C, G, G, G) then concatenate container + object
-                # along the channel dim to form a (B, 2C, G, G, G) volume for the 3D CNN.
                 cont_vol = shape_latent_container.permute(0, 2, 1).view(B, C, G, G, G)
                 obj_vol = shape_latent_object.permute(0, 2, 1).view(B, C, G, G, G)
-                vol = torch.cat([cont_vol, obj_vol], dim=1)  # (B, 2C, G, G, G)
-                features.append(self.shape_encoder(vol))  # (B, d_model)
-
+                features.append(self.shape_encoder(torch.cat([cont_vol, obj_vol], dim=1)))
             elif self.use_stats_encoder:
-                # Global mean/std/max over token dim
                 cont_f = shape_latent_container.float()
                 obj_f = shape_latent_object.float()
-                stats = torch.cat(
-                    [
-                        cont_f.mean(dim=1),
-                        cont_f.std(dim=1),
-                        cont_f.amax(dim=1),
-                        obj_f.mean(dim=1),
-                        obj_f.std(dim=1),
-                        obj_f.amax(dim=1),
-                    ],
-                    dim=-1,
-                )  # (B, 48)
+                stats = torch.cat([
+                    cont_f.mean(dim=1), cont_f.std(dim=1), cont_f.amax(dim=1),
+                    obj_f.mean(dim=1), obj_f.std(dim=1), obj_f.amax(dim=1),
+                ], dim=-1)
                 features.append(self.shape_encoder(stats))
-
             else:
-                # Flatten both shapes and concatenate: (B, 2 * shape_latent_dim)
-                combined_shape = torch.cat(
-                    [
-                        shape_latent_container.view(B, -1),
-                        shape_latent_object.view(B, -1),
-                    ],
-                    dim=-1,
-                )
-                features.append(self.shape_encoder(combined_shape))  # (B, d_model)
+                combined_shape = torch.cat([
+                    shape_latent_container.view(B, -1), shape_latent_object.view(B, -1),
+                ], dim=-1)
+                features.append(self.shape_encoder(combined_shape))
 
         if self.use_slat:
-            combined_slat = torch.cat(
-                [slat_features_container, slat_features_object], dim=-1
-            )
-            features.append(self.slat_encoder(combined_slat))  # (B, 128)
+            combined_slat = torch.cat([slat_features_container, slat_features_object], dim=-1)
+            features.append(self.slat_encoder(combined_slat))
+
+        if (self.use_slat_cross_attn
+                and slat_seq_container is not None
+                and slat_seq_object is not None):
+            cont_seq = self.slat_seq_proj(slat_seq_container.float())   # (B, K, 64)
+            obj_seq = self.slat_seq_proj(slat_seq_object.float())       # (B, K, 64)
+            cross_out = self.slat_cross_attn_block(obj_seq, cont_seq)   # (B, K, 64)
+            weights = torch.softmax(self.slat_cross_attn_pool(cross_out.float()), dim=1)
+            features.append((cross_out.float() * weights).sum(dim=1))  # (B, 64)
 
         features.append(geometric_features)
 
         if self.use_hybrid and geometric_estimate is not None:
-            # log1p to handle extreme values
-            features.append(
-                torch.log1p(geometric_estimate.clamp(min=0.0)).unsqueeze(-1)
-            )
+            features.append(torch.log1p(geometric_estimate.clamp(min=0.0)).unsqueeze(-1))
 
         if self.use_image_encoder:
             if image_feats is None:
-                raise ValueError(
-                    "use_image_encoder=True but image_feats is None. "
-                    "Run scripts/generate_image_embeddings.py first."
-                )
+                raise ValueError("use_image_encoder=True but image_feats is None.")
             features.append(self.image_proj(image_feats.float()))
 
         if self.use_masked_image_encoder:
             if container_image_feats is None or object_image_feats is None:
                 raise ValueError(
-                    "use_masked_image_encoder=True but container/object image feats are None. "
-                    "Run: generate_image_embeddings.py --masked first."
+                    "use_masked_image_encoder=True but container/object image feats are None."
                 )
             features.append(self.container_image_proj(container_image_feats.float()))
             features.append(self.object_image_proj(object_image_feats.float()))
@@ -295,7 +225,17 @@ class CountPredictor(nn.Module):
             combined_slat_raw = torch.cat(
                 [slat_features_container, slat_features_object], dim=-1
             )
-            pf_pred = self.pf_head(combined_slat_raw.float()).squeeze(-1)  # (B,)
+            if (self.use_image_in_pf_head
+                    and container_image_feats is not None
+                    and object_image_feats is not None):
+                pf_input = torch.cat([
+                    combined_slat_raw.float(),
+                    self.pf_cont_proj(container_image_feats.float()),
+                    self.pf_obj_proj(object_image_feats.float()),
+                ], dim=-1)
+            else:
+                pf_input = combined_slat_raw.float()
+            pf_pred = self.pf_head(pf_input).squeeze(-1)
             return count, pf_pred
 
         return count
@@ -320,4 +260,6 @@ def build_model(cfg: ExperimentConfig):
         image_feat_dim=cfg.model.image_feat_dim,
         use_masked_image_encoder=cfg.ablation.use_masked_image_encoder,
         use_packing_factor_head=cfg.ablation.use_packing_factor_head,
+        use_slat_cross_attn=cfg.ablation.use_slat_cross_attn,
+        use_image_in_pf_head=cfg.ablation.use_image_in_pf_head,
     )

@@ -45,12 +45,14 @@ def initialize_dataloader(cfg: ExperimentConfig):
         image_feat_file=feat_file,
         container_image_feat_file=cont_file,
         object_image_feat_file=obj_file,
+        use_clean_geom=cfg.ablation.use_clean_geom,
     )
     val_dataset = CountDataset(
         cfg.data.val_dir,
         image_feat_file=feat_file,
         container_image_feat_file=cont_file,
         object_image_feat_file=obj_file,
+        use_clean_geom=cfg.ablation.use_clean_geom,
     )
 
     train_sampler = DistributedSampler(train_dataset, shuffle=True)
@@ -150,12 +152,16 @@ def train(cfg: ExperimentConfig, train_loader, val_loader, model, device):
                 device, non_blocking=True
             )
 
+            slat_seq_container = container_out["slat_seq"].to(device, non_blocking=True)
+            slat_seq_object = object_out["slat_seq"].to(device, non_blocking=True)
+
             geom_feat = sample["geom_features"].to(device, non_blocking=True)
-            pixel_feats = sample.get("pixel_feats")
-            if pixel_feats is not None:
-                geom_feat = torch.cat(
-                    [geom_feat, pixel_feats.to(device, non_blocking=True)], dim=-1
-                )
+            if not cfg.ablation.use_clean_geom:
+                pixel_feats = sample.get("pixel_feats")
+                if pixel_feats is not None:
+                    geom_feat = torch.cat(
+                        [geom_feat, pixel_feats.to(device, non_blocking=True)], dim=-1
+                    )
 
             # Geometric estimate
             cont_scale = (
@@ -191,6 +197,8 @@ def train(cfg: ExperimentConfig, train_loader, val_loader, model, device):
                     image_feats=image_feats,
                     container_image_feats=container_image_feats,
                     object_image_feats=object_image_feats,
+                    slat_seq_container=slat_seq_container,
+                    slat_seq_object=slat_seq_object,
                 )
                 pred_count = result[0] if isinstance(result, tuple) else result
                 loss = loss_fn(pred_count.float(), true_count, cfg)
@@ -279,15 +287,19 @@ def train(cfg: ExperimentConfig, train_loader, val_loader, model, device):
                             device, non_blocking=True
                         )
 
+                        slat_seq_container = container_out["slat_seq"].to(device, non_blocking=True)
+                        slat_seq_object = object_out["slat_seq"].to(device, non_blocking=True)
+
                         geom_feat = sample["geom_features"].to(
                             device, non_blocking=True
                         )
-                        pixel_feats = sample.get("pixel_feats")
-                        if pixel_feats is not None:
-                            geom_feat = torch.cat(
-                                [geom_feat, pixel_feats.to(device, non_blocking=True)],
-                                dim=-1,
-                            )
+                        if not cfg.ablation.use_clean_geom:
+                            pixel_feats = sample.get("pixel_feats")
+                            if pixel_feats is not None:
+                                geom_feat = torch.cat(
+                                    [geom_feat, pixel_feats.to(device, non_blocking=True)],
+                                    dim=-1,
+                                )
 
                         cont_scale = (
                             container_out["scale"]
@@ -330,6 +342,8 @@ def train(cfg: ExperimentConfig, train_loader, val_loader, model, device):
                                 image_feats=image_feats,
                                 container_image_feats=container_image_feats,
                                 object_image_feats=object_image_feats,
+                                slat_seq_container=slat_seq_container,
+                                slat_seq_object=slat_seq_object,
                             )
                             pred_count = (
                                 result[0] if isinstance(result, tuple) else result

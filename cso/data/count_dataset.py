@@ -1,19 +1,22 @@
 from torch.utils.data import Dataset
 from PIL import Image
 import json
+import math
 import numpy as np
 import torch
 from pathlib import Path
+
+_SLAT_SEQ_K = 256  # number of voxels to subsample per object for cross-attention
 
 
 class CountDataset(Dataset):
     def __init__(
         self,
         data_dirs,
-        cache_in_memory=False,
         image_feat_file="image_feats.pt",
         container_image_feat_file="",
         object_image_feat_file="",
+        use_clean_geom=False,
     ):
         if isinstance(data_dirs, (str, Path)):
             data_dirs = [data_dirs]
@@ -22,6 +25,7 @@ class CountDataset(Dataset):
         self.image_feat_file = image_feat_file
         self.container_image_feat_file = container_image_feat_file
         self.object_image_feat_file = object_image_feat_file
+        self.use_clean_geom = use_clean_geom
 
         self.samples = []
         for dir in self.data_dirs:
@@ -30,40 +34,21 @@ class CountDataset(Dataset):
                     d
                     for d in dir.iterdir()
                     if (d / "sam3d_data" / "embeddings.pt").exists()
-                    or (d / "embeddings.pt").exists()
+                    and (d / "sam_data").exists()
                 ]
             )
         self.samples = sorted(self.samples)
-
-        self._cache = None
-        if cache_in_memory:
-            self._cache = [self._load(i) for i in range(len(self.samples))]
 
     def __len__(self):
         return len(self.samples)
 
     def _load(self, idx):
-        sam3d_path = self.samples[idx] / "sam3d_data" / "embeddings.pt"
-        path = (
-            sam3d_path if sam3d_path.exists() else self.samples[idx] / "embeddings.pt"
-        )
-        try:
-            data = torch.load(path, map_location="cpu", weights_only=False)
-        except Exception as e:
-            print(f"Corrupted embedding found at path: {path} and index: {idx}")
-            raise e
-
-        image_feats_path = self.samples[idx] / self.image_feat_file
-        image_feats = (
-            torch.load(image_feats_path, map_location="cpu", weights_only=True)
-            if image_feats_path.exists()
-            else None
-        )
+        scene = self.samples[idx]
 
         def _load_features(filename):
             if not filename:
                 return None
-            p = self.samples[idx] / filename
+            p = scene / filename
             if not p.exists():
                 return None
             feat = torch.load(p, map_location="cpu", weights_only=True)
@@ -72,15 +57,20 @@ class CountDataset(Dataset):
                 feat = feat.float().mean(dim=0)
             return feat
 
+        # Image features
+        image_feats_path = scene / self.image_feat_file
+        image_feats = (
+            torch.load(image_feats_path, map_location="cpu", weights_only=True)
+            if image_feats_path.exists()
+            else None
+        )
         container_image_feats = _load_features(self.container_image_feat_file)
         object_image_feats = _load_features(self.object_image_feat_file)
 
         # Pixel area features: log container px, log mean object px, log ratio
-        scene = self.samples[idx]
         frame_id_path = scene / "sam_data" / "frame_id.txt"
         inst_px_path = scene / "sam_data" / "instance_px.pt"
 
-        # Use obj_seg pile mask (filled interior) for container pixel area
         cont_px = 0.0
         if frame_id_path.exists():
             fid = frame_id_path.read_text().strip()
@@ -93,16 +83,14 @@ class CountDataset(Dataset):
         obj_px = 0.0
         if inst_px_path.exists():
             try:
-                inst_px = torch.load(
-                    inst_px_path, map_location="cpu", weights_only=True
-                )
+                inst_px = torch.load(inst_px_path, map_location="cpu", weights_only=True)
                 obj_px = float(inst_px.float().mean().item())
             except Exception:
-                pass
+                pass  # corrupted file — fall back to obj_px=0
 
         pixel_feats = _compute_pixel_feats(cont_px, obj_px)
 
-        # Packing factor from simulation ground truth (volume_ratio_no_edges)
+        # Packing factor from simulation ground truth
         packing_factor = None
         sim_path = scene / "simulation_results.json"
         if sim_path.exists():
@@ -112,32 +100,54 @@ class CountDataset(Dataset):
             if pf is not None:
                 packing_factor = torch.tensor(float(pf), dtype=torch.float32)
 
+        # SAM3D embeddings
+        sam3d_path = scene / "sam3d_data" / "embeddings.pt"
+        try:
+            sam3d_data = torch.load(sam3d_path, map_location="cpu", weights_only=False)
+        except Exception as e:
+            print(f"Error loading sam3d embeddings at {sam3d_path} (idx={idx})")
+            raise e
+
+        if self.use_clean_geom:
+            geom_features = _compute_clean_geom_features(
+                sam3d_data["container"], sam3d_data["object"]
+            )
+        else:
+            geom_features = sam3d_data["geom_features"]
+
         return {
-            "container_outputs": data["container"],
-            "object_outputs": data["object"],
-            "true_count": torch.tensor(data["true_count"], dtype=torch.float32),
-            "geom_features": data["geom_features"],
-            "geom_estimate": torch.tensor(data["geom_estimate"], dtype=torch.float32),
+            "container_outputs": sam3d_data["container"],
+            "object_outputs": sam3d_data["object"],
+            "true_count": torch.tensor(sam3d_data["true_count"], dtype=torch.float32),
+            "geom_features": geom_features,
+            "geom_estimate": torch.tensor(sam3d_data["geom_estimate"], dtype=torch.float32),
             "image_feats": image_feats,
             "container_image_feats": container_image_feats,
             "object_image_feats": object_image_feats,
             "pixel_feats": pixel_feats,
             "packing_factor": packing_factor,
-            "sample_name": self.samples[idx].name,
+            "sample_name": scene.name,
         }
 
     def __getitem__(self, idx):
-        if self._cache is not None:
-            return self._cache[idx]
         return self._load(idx)
 
 
+# ── helpers ──────────────────────────────────────────────────────────────────
+
 def _pool_slat(x):
-    """
-    Max + mean pool
-    (N, D) slat tensor -> (2*D,) vector.
-    """
+    """Max + mean pool (N, D) → (2*D,)."""
     return torch.cat([x.max(dim=0)[0], x.mean(dim=0)], dim=-1)
+
+
+def _subsample_slat(x, K=_SLAT_SEQ_K):
+    """Randomly subsample K rows from (N, D) → (K, D). Oversamples if N < K."""
+    N = x.shape[0]
+    if N >= K:
+        idx = torch.randperm(N)[:K]
+    else:
+        idx = torch.randint(0, N, (K,))
+    return x[idx]
 
 
 def _compute_pixel_feats(cont_px: float, obj_px: float) -> torch.Tensor:
@@ -147,12 +157,46 @@ def _compute_pixel_feats(cont_px: float, obj_px: float) -> torch.Tensor:
     return torch.tensor([log_cont, log_obj, log_ratio], dtype=torch.float32)
 
 
+def _compute_clean_geom_features(container: dict, obj: dict) -> torch.Tensor:
+    """6 clean, non-redundant geometric features derived from SAM3D coords and scale.
+
+    Features:
+      0  log(N_cont_vox + 1)           — container voxel count (proxy for volume)
+      1  log(N_obj_vox + 1)            — object voxel count
+      2  log(N_cont_vox / N_obj_vox + 1) — voxel count ratio (r=0.42 with true count)
+      3  container bbox aspect ratio   — max/min of bbox dimensions
+      4  object bbox aspect ratio
+      5  log(cont_scale / obj_scale)   — 1D scale ratio (avoids cube amplification)
+    """
+    def aspect_ratio(coords):
+        xyz = coords[:, 1:].float()
+        bbox = xyz.max(0).values - xyz.min(0).values + 1
+        return float(bbox.max() / (bbox.min() + 1e-6))
+
+    N_cont = container["coords"].shape[0]
+    N_obj = obj["coords"].shape[0]
+    cont_scale = float(container["scale"][0])
+    obj_scale = float(obj["scale"][0])
+
+    return torch.tensor([
+        math.log(N_cont + 1),
+        math.log(N_obj + 1),
+        math.log(N_cont / max(N_obj, 1) + 1),
+        aspect_ratio(container["coords"]),
+        aspect_ratio(obj["coords"]),
+        math.log(max(cont_scale / max(obj_scale, 1e-6), 1e-6)),
+    ], dtype=torch.float32)
+
+
 def collate_fn(batch):
     return {
         "container_outputs": {
             "coords": [b["container_outputs"]["coords"] for b in batch],
             "slat_features": torch.stack(
                 [_pool_slat(b["container_outputs"]["slat_features"]) for b in batch]
+            ),
+            "slat_seq": torch.stack(
+                [_subsample_slat(b["container_outputs"]["slat_features"]) for b in batch]
             ),
             "shape_latent": torch.stack(
                 [b["container_outputs"]["shape_latent"] for b in batch]
@@ -169,6 +213,9 @@ def collate_fn(batch):
             "coords": [b["object_outputs"]["coords"] for b in batch],
             "slat_features": torch.stack(
                 [_pool_slat(b["object_outputs"]["slat_features"]) for b in batch]
+            ),
+            "slat_seq": torch.stack(
+                [_subsample_slat(b["object_outputs"]["slat_features"]) for b in batch]
             ),
             "shape_latent": torch.stack(
                 [b["object_outputs"]["shape_latent"] for b in batch]

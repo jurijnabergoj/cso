@@ -64,7 +64,10 @@ class AblationConfig:
     use_masked_image_encoder: bool = (
         False  # separate masked crops for container + object
     )
-    use_packing_factor_head: bool = False  # auxiliary pf head on slat features
+    use_packing_factor_head: bool = False   # auxiliary pf head on slat features
+    use_slat_cross_attn: bool = False       # cross-attention between slat voxel sequences
+    use_clean_geom: bool = False            # 6-dim clean geom features instead of 13-dim legacy
+    use_image_in_pf_head: bool = False      # add DINOv2 container+obj feats to pf_head input
 
 
 @dataclass
